@@ -1,37 +1,32 @@
-import { dirname, extname, relative, resolve } from 'path'
-import axios from 'axios'
-import { createWriteStream, emptyDir, ensureDir, existsSync, unlink } from 'fs-extra'
-import type { Plugin, ResolvedConfig, ViteDevServer } from 'vite'
-import _debug from 'debug'
-import md5 from 'blueimp-md5'
-import MagicString from 'magic-string'
+import { dirname, relative, resolve } from 'path'
 import { slash } from '@antfu/utils'
+import _debug from 'debug'
+import { emptyDir, ensureDir, existsSync, unlink } from 'fs-extra'
+import { parse } from 'node-html-parser'
+import type { Plugin, ResolvedConfig, ViteDevServer } from 'vite'
+import { type RemoteScriptMeta, chunkHash, downloadTo, getElementMeta, isValidHttpUrl } from './utils'
 
-export interface RemoteAssetsRule {
+export interface RemoteScriptsOptions {
   /**
-   * Regex to match urls, should be http:// or https://
-   */
-  match: RegExp
-  /**
-   * Extension for the url, should by leading with `.`
+   * Directory name to store the styles or scripts from remote
    *
-   * When not specified, if will try to infer from the url.
-   */
-  ext?: string
-}
-
-export interface RemoteAssetsOptions {
-  /**
-   * Directory name to store the assets from remote
-   *
-   * @default 'node_modules/.remote-assets'
+   * @default 'node_modules/.remote-scripts'
    */
   assetsDir?: string
 
   /**
-   * Rules to match urls to replace
+   * Mark the elements that need to download resources
+   *
+   * @default data-remote-script
    */
-  rules?: RemoteAssetsRule[]
+  attributeName?: string
+
+  /**
+   * Prefix appended to the file when bundling
+   *
+   * @default remote-script
+   */
+  chunkPrefix?: 'remote-script.'
 
   /**
    * Mode to resolve urls
@@ -48,29 +43,24 @@ export interface RemoteAssetsOptions {
   awaitDownload?: boolean
 }
 
-export const DefaultRules: RemoteAssetsRule[] = [
-  {
-    match: /\b(https?:\/\/[\w_#&?.\/-]*?\.(?:png|jpe?g|svg|ico))(?=[`'")\]])/ig,
+const defaultScriptMetas: Record<string, RemoteScriptMeta> = {
+  SCRIPT: {
+    attributeName: 'src',
+    extension: '.js',
   },
-]
-
-function isValidHttpUrl(str: string) {
-  let url
-  try {
-    url = new URL(str)
-  }
-  catch (_) {
-    return false
-  }
-  return url.protocol === 'http:' || url.protocol === 'https:'
+  LINK: {
+    attributeName: 'href',
+    extension: '.css',
+  },
 }
 
-const debug = _debug('vite-plugin-remote-assets')
+const debug = _debug('vite-plugin-remote-scripts')
 
-export function VitePluginRemoteAssets(options: RemoteAssetsOptions = {}): Plugin {
+export function VitePluginRemoteScripts(options: RemoteScriptsOptions = {}): Plugin {
   const {
-    assetsDir = 'node_modules/.remote-assets',
-    rules = DefaultRules,
+    assetsDir = 'node_modules/.remote-scripts',
+    attributeName = 'data-remote-script',
+    chunkPrefix = 'remote-script.',
     resolveMode = 'relative',
     awaitDownload = true,
   } = options
@@ -79,59 +69,46 @@ export function VitePluginRemoteAssets(options: RemoteAssetsOptions = {}): Plugi
   let config: ResolvedConfig
   let server: ViteDevServer | undefined
 
-  async function downloadTo(url: string, filepath: string): Promise<void> {
-    const writer = createWriteStream(filepath)
-
-    const response = await axios({
-      url,
-      method: 'GET',
-      responseType: 'stream',
-    })
-
-    response.data.pipe(writer)
-
-    return new Promise((resolve, reject) => {
-      writer.on('finish', resolve)
-      writer.on('error', reject)
-    })
-  }
-
   const tasksMap: Record<string, Promise<void> | undefined> = {}
 
   async function transform(code: string, id: string) {
-    const tasks: Promise<void>[] = []
+    const root = parse(code)
+    const elements = root.querySelectorAll(`link[${attributeName}], script[${attributeName}]`)
 
-    const s = new MagicString(code)
+    if (elements.length > 0) {
+      const tasks: Promise<void>[] = []
+      let hasReplaced = false
 
-    let hasReplaced = false
-    let match
+      for (const element of elements) {
+        const meta = getElementMeta(element, defaultScriptMetas)
 
-    for (const rule of rules) {
-      rule.match.lastIndex = 0
-      // eslint-disable-next-line no-cond-assign
-      while ((match = rule.match.exec(code))) {
-        const start = match.index
-        const end = start + match[0].length
-        const url = match[0]
-        if (!url || !isValidHttpUrl(url))
+        if (!meta.url || !isValidHttpUrl(meta.url))
           continue
 
-        const hash = md5(url) + (rule.ext || extname(url))
-        const filepath = slash(resolve(dir, hash))
+        const hash = chunkPrefix + chunkHash(meta.url) + defaultScriptMetas[meta.tagName].extension
+        let filepath
 
-        debug('detected', url, hash)
+        if (config.env.PROD) {
+          filepath = slash([config.root, config.build.outDir, config.build.assetsDir, hash].join('/'))
+        }
+        else {
+          filepath = slash(resolve(dir, hash))
+        }
+
+        debug('detected', meta.url, hash)
 
         if (!existsSync(filepath) || tasksMap[filepath]) {
           if (!tasksMap[filepath]) {
             tasksMap[filepath] = (async () => {
               try {
-                debug('downloading', url)
-                await downloadTo(url, filepath)
-                debug('downloaded', url)
+                debug('downloading', meta.url)
+                await downloadTo(meta.url, filepath)
+                debug('downloaded', meta.url)
               }
               catch (e) {
-                if (existsSync(filepath))
+                if (existsSync(filepath)) {
                   await unlink(filepath)
+                }
                 throw e
               }
               finally {
@@ -141,79 +118,97 @@ export function VitePluginRemoteAssets(options: RemoteAssetsOptions = {}): Plugi
           }
           tasks.push(tasksMap[filepath]!)
 
-          if (!awaitDownload)
+          if (!config.env.PROD && !awaitDownload) {
             continue
+          }
         }
 
         hasReplaced = true
 
-        const mode = typeof resolveMode === 'function' ? resolveMode(id, url) : resolveMode
-
+        const mode = typeof resolveMode === 'function' ? resolveMode(id, meta.url) : resolveMode
         let newUrl: string
 
-        if (mode === 'relative') {
-          newUrl = slash(relative(dirname(id), `${dir}/${hash}`))
-          if (newUrl[0] !== '.')
-            newUrl = `./${newUrl}`
+        if (config.env.PROD) {
+          newUrl = slash([config.base + config.build.assetsDir, hash].join('/'))
         }
         else {
-          let path = `${dir}/${hash}`
-          if (!path.startsWith('/'))
-            path = `/${path}`
-          newUrl = `/@fs${path}`
+          if (mode === 'relative') {
+            newUrl = slash(relative(dirname(id), `${dir}/${hash}`))
+            if (newUrl[0] !== '.') {
+              newUrl = `./${newUrl}`
+            }
+          }
+          else {
+            let path = `${dir}/${hash}`
+            if (!path.startsWith('/')) {
+              path = `/${path}`
+            }
+
+            newUrl = `/@fs${path}`
+          }
         }
 
-        s.overwrite(start, end, newUrl)
+        element.setAttribute(defaultScriptMetas[element.tagName].attributeName, newUrl)
       }
+
+      if (tasks.length) {
+        if (config.env.PROD || awaitDownload) {
+          await Promise.all(tasks)
+        }
+        else {
+          Promise.all(tasks).then(() => {
+            if (server) {
+              const module = server.moduleGraph.getModuleById(id)
+
+              if (module) {
+                server.moduleGraph.invalidateModule(module)
+              }
+            }
+          })
+        }
+      }
+
+      if (!hasReplaced)
+        return null
+
+      code = root.toString()
     }
 
-    if (tasks.length) {
-      if (awaitDownload) {
-        await Promise.all(tasks)
-      }
-      else {
-        Promise.all(tasks).then(() => {
-          if (server) {
-            const module = server.moduleGraph.getModuleById(id)
-            if (module)
-              server.moduleGraph.invalidateModule(module)
-          }
-        })
-      }
+    return code
+  }
+
+  async function configResolved(_config: ResolvedConfig) {
+    config = _config
+
+    if (config.env.PROD) {
+      dir = slash(resolve(config.root, config.build.outDir, config.build.assetsDir))
+    }
+    else {
+      dir = slash(resolve(config.root, assetsDir))
     }
 
-    if (!hasReplaced)
-      return null
-
-    return {
-      code: s.toString(),
-      map: config.build.sourcemap ? s.generateMap({ hires: true }) : null,
+    if (config.server.force) {
+      await emptyDir(dir)
     }
+
+    await ensureDir(dir)
   }
 
   return {
-    name: 'vite-plugin-remote-assets',
-    enforce: 'pre',
-    async configResolved(_config) {
-      config = _config
-      dir = slash(resolve(config.root, assetsDir))
-      if (config.server.force)
-        await emptyDir(dir)
-      await ensureDir(dir)
-    },
+    name: 'vite-plugin-remote-scripts',
+    enforce: 'post',
+    configResolved,
     configureServer(_server) {
       server = _server
     },
-    async transform(code, id) {
-      return await transform(code, id)
-    },
     transformIndexHtml: {
-      enforce: 'pre',
+      enforce: 'post',
       async transform(code, ctx) {
-        return (await transform(code, ctx.filename))?.code
+        await configResolved(config)
+        return await transform(code, ctx.filename)
       },
     },
   } as Plugin
 }
 
-export default VitePluginRemoteAssets
+export default VitePluginRemoteScripts

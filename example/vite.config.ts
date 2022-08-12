@@ -1,12 +1,15 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
-import remoteAssets from 'vite-plugin-remote-assets'
+import remoteScripts from 'vite-plugin-remote-scripts'
 
 export default defineConfig({
   plugins: [
     vue(),
-    remoteAssets({
+    remoteScripts({
       awaitDownload: false,
     }),
   ],
+  build: {
+    sourcemap: true,
+  },
 })

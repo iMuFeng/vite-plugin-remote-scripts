@@ -1,46 +1,35 @@
-# vite-plugin-remote-assets
+# vite-plugin-remote-scripts
 
-[![NPM version](https://img.shields.io/npm/v/vite-plugin-remote-assets?color=a1b858&label=)](https://www.npmjs.com/package/vite-plugin-remote-assets)
-
-
-Bundles your assets from remote URLs with your app
+Bundles your styles or scripts from remote urls with your app.
 
 ```html
-<img src="http://example.com/image.jpg" />
+<script data-remote-script src="http://example.com/library.js"></script>
 ```
 
 To
 
 ```html
-<img src="/node_modules/.remote-assets/f83j2f.jpg" />
+<img src="./node_modules/.remote-scripts/remote-script.c3b8e480.js" />
 ```
 
 
 ## Install
 
 ```bash
-npm i -D vite-plugin-remote-assets
+npm i vite-plugin-remote-scripts -D
 ```
 
 ```ts
 // vite.config.ts
-import RemoteAssets from 'vite-plugin-remote-assets'
+import RemoteScripts from 'vite-plugin-remote-scripts'
 
 export default {
   plugins: [
-    RemoteAssets()
+    RemoteScripts()
   ]
 }
 ```
 
-## Sponsors
-
-<p align="center">
-  <a href="https://cdn.jsdelivr.net/gh/antfu/static/sponsors.svg">
-    <img src='https://cdn.jsdelivr.net/gh/antfu/static/sponsors.svg'/>
-  </a>
-</p>
-
 ## License
 
-[MIT](./LICENSE) License © 2021 [Anthony Fu](https://github.com/antfu)
+[MIT](./LICENSE) License © 2022

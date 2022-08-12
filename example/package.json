@@ -13,6 +13,6 @@
     "@vitejs/plugin-vue": "^3.0.1",
     "@vue/compiler-sfc": "^3.2.37",
     "vite": "^3.0.4",
-    "vite-plugin-remote-assets": "workspace:*"
+    "vite-plugin-remote-scripts": "workspace:*"
   }
 }

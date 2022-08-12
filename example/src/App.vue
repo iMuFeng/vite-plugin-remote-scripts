@@ -1,5 +1,18 @@
+<script setup>
+import { onMounted, ref } from 'vue'
+
+const time = ref('')
+
+onMounted(() => {
+  // eslint-disable-next-line no-console
+  console.log('onMounted')
+
+  time.value = window.dayjs().toISOString()
+})
+</script>
+
 <template>
-  <img alt="Vite logo" src="https://vitejs.dev/logo.svg">
+  {{ time }}
 </template>
 
 <style>
