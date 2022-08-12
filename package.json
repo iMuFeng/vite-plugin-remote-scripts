@@ -1,6 +1,6 @@
 {
   "name": "vite-plugin-remote-scripts",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "packageManager": "pnpm@7.7.0",
   "description": "Bundles your styles or scripts from remote urls with your app",
   "author": "Anthony Fu <anthonyfu117@hotmail.com>",
